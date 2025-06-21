@@ -1,29 +1,31 @@
-# World Quant Brain API
+# World Quant Brain alpha utils
 
-A simple wrapper of world quant api.
+Uitls for mining alphas with world quant brain API. It has three commands:
+
+1. `crawl.py`: Crawling fields from world quant brain API.
+2. `simulate.py`: Send simulations to brain API.
+3. `collect.py`: Collect simulation results from brain API.
+
+Fields, simulations and alphas all stored in a local sqlite3 DB.
 
 Examples:
 
-- Search fields
+1. Crawling fields
 
-```python
-cli = brain.Client("user", "pass")
-
-fields = cli.data_fields().with_filter(data_type="MATRIX", dataset_id="fundamental6").limit(70)
-
-for item in fields.iter()
-    print(f"id: {item.id}, description: {item.description}")
+```bash
+python crawl.py --db alpha.db --type MATRIX --dataset_id fundamental6
 ```
 
-- Submit simulation
+2. Generate simulation configs with sql in db
 
-```python
-cli = brain.Client("user", "pass")
+3. Send simulation to API
 
-sim = cli.simulation()
-result = sim.with_expr("returns").send().wait()
-print(result.alpha)
+```bash
+python simulate.py --db alpha.db --limit 100 --interval 60
+```
 
-alpha_detail = result.detail()
-print(alpha_detail)
+4. Collect simulation results and alpha at same time
+
+```bash
+python collect.py --db alpha.db --interval 60
 ```

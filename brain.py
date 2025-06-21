@@ -1,4 +1,7 @@
 import time
+import os
+import sys
+import json
 import requests
 
 from urllib.parse import urljoin
@@ -58,20 +61,26 @@ class Client:
         try:
             s = self._session
             resp = s.send(s.prepare_request(req))
-        except Exception as e:
-            if retry_times == 0:
-                raise NetworkError(e)
-        else:
             if resp.status_code == 401:
                 self.connect()
                 return self._send(req, retry_times=retry_times - 1)
             return resp
+        except AuthenticationError as e:
+            raise e
+        except Exception as e:
+            if retry_times <= 0:
+                raise NetworkError(e)
+            else:
+                return self._send(req, retry_times=retry_times - 1)
 
     def data_fields(self):
         return DataFields(self)
 
     def simulation(self):
         return Simulation(self)
+
+    def simulation_result(self, simulation_id: str):
+        return SimulationResult(self, simulation_id)
 
 
 class DataField:
@@ -102,11 +111,11 @@ class DataFields:
         self._cli = cli
         self._filter = {
             "region": "USA",
-            "delay": "1",
+            "delay": 1,
             "universe": "TOP3000",
             "instrumentType": "EQUITY",
         }
-        self._limit = 200
+        self._limit = sys.maxsize
 
     def with_filter(
         self,
@@ -152,7 +161,7 @@ class DataFields:
 
             resp = self._cli.send(req)
             if not resp.ok:
-                raise DataFieldAPIError
+                raise DataFieldAPIError(resp)
 
             resp_json = resp.json()
             resp_count = resp_json["count"]
@@ -205,7 +214,7 @@ class Simulation:
 
     def with_settings(
         self,
-        instrument_type: str | None = None,
+        instrumentType: str | None = None,
         region: str | None = None,
         universe: str | None = None,
         delay: int | None = None,
@@ -218,8 +227,8 @@ class Simulation:
         language: str | None = None,
         visualization: bool | None = None,
     ):
-        if instrument_type is not None:
-            self._sim["settings"]["instrumentType"] = instrument_type
+        if instrumentType is not None:
+            self._sim["settings"]["instrumentType"] = instrumentType
 
         if region is not None:
             self._sim["settings"]["region"] = region
@@ -271,7 +280,9 @@ class Simulation:
         if not resp.ok:
             raise SimulationAPIError(resp)
 
-        return SimulationResult(self._cli, resp.headers["Location"])
+        simulation_id = os.path.basename(resp.headers["Location"])
+
+        return SimulationResult(self._cli, simulation_id)
 
 
 class SimulationResultAPIError(BrainError):
@@ -283,9 +294,9 @@ class SimulationResultAPIError(BrainError):
 
 
 class SimulationResult:
-    def __init__(self, cli: Client, url: str):
+    def __init__(self, cli: Client, simulation_id: str):
         self._cli = cli
-        self._url = url
+        self.simulation_id = simulation_id
         self.alpha = None
         self.default_retry_after = 1.0  # default check period
         self.max_fail_times = 3  # max fail times
@@ -293,22 +304,25 @@ class SimulationResult:
     def wait(self):
         fail_times = 0
         while True:
-            req = requests.Request("GET", self._url)
+            req = requests.Request("GET", f"{WQB_API}/simulations/{self.simulation_id}")
             resp = self._cli.send(req)
 
             if not resp.ok:
                 fail_times += 1
                 if fail_times > self.max_fail_times:
                     raise SimulationResultAPIError(
-                        "exceed max retry time when trying to get simulation result."
+                        "exceed max retry time. last error: {}".format(resp.text)
                     )
-
                 time.sleep(self.default_retry_after * 2**fail_times)
                 continue
 
             if "Retry-After" in resp.headers:
                 time.sleep(float(resp.headers["Retry-After"]))
                 continue
+
+            result = resp.json()
+            if "alpha" not in result:
+                raise SimulationResultAPIError(json.dumps(result))
 
             # response:
             # {
@@ -319,7 +333,7 @@ class SimulationResult:
             #   "status":"COMPLETE",
             #   "alpha":"w2zl935"
             # }
-            self.alpha = resp.json()["alpha"]
+            self.alpha = result["alpha"]
             return self
 
     def detail(self):
@@ -328,7 +342,7 @@ class SimulationResult:
                 "wait method should be called before detail method"
             )
 
-        req = requests.Request("GET", urljoin(WQB_API, "alphas", self.alpha_id))
+        req = requests.Request("GET", f"{WQB_API}/alphas/{self.alpha}")
         resp = self._cli.send(req)
         if resp.ok:
             return resp.json()
