@@ -15,6 +15,11 @@ class BrainError(Exception):
         return "brain base error."
 
 
+class ExceedAPILimitError(BrainError):
+    def __str__(self):
+        return "exceed api limit"
+
+
 class NetworkError(BrainError):
     def __init__(self, err: Exception):
         self.inner = err

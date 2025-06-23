@@ -4,7 +4,49 @@ import sys
 import time
 
 import brain
-import alpha_db
+
+from alpha_db import AlphaDB
+
+
+def fetch_results(db: AlphaDB, cli: brain.Client):
+    simulations = db.simulations()
+    alphas = db.alphas()
+    total = 0
+    wait_sec = 1.0
+    while True:
+        count = 0
+        for row in simulations.filter(status="SIMULATING"):
+            try:
+                result = cli.simulation_result(row["simulation_id"])
+
+                alpha = result.wait().detail()
+                count += 1
+
+                alphas.save(alpha)
+                simulations.complete(row["id"], alpha["id"])
+
+                print(f"{count:0>3}, save alpha: {alpha['id']}")
+            except brain.BrainError as e:
+                simulations.error(row["id"])
+                print(
+                    f"{count:0>3}, simulation: {row['simulation_id']}, error: {str(e)}",
+                    file=sys.stderr,
+                )
+
+        if count != 0:
+            total += count
+            wait_sec = wait_sec / 3.0 if wait_sec / 3.0 > 1.0 else 1.0
+
+            print(
+                f"[{total:0>4}] saved {count} alphas, wait {wait_sec:.2f} secs for next scan."
+            )
+        else:
+            wait_sec = wait_sec * 2 if wait_sec < 5.0 else wait_sec
+            print(
+                f"[{total:0>4}] no simulations found, wait {wait_sec:.2f} secs for next scan."
+            )
+
+        time.sleep(wait_sec)
 
 
 def main():
@@ -25,12 +67,6 @@ def main():
     parser.add_argument(
         "--limit", default=0, type=int, help="max number of alphas to get."
     )
-    parser.add_argument(
-        "--interval",
-        default=10.0,
-        type=float,
-        help="wait time before scan uncollected simulations in database.",
-    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -40,46 +76,8 @@ def main():
 
     cli = brain.Client(args.user, args.password)
 
-    with alpha_db.AlphaDB(args.db) as db:
-        simulations = db.simulations()
-        alphas = db.alphas()
-        total = 0
-        while True:
-            count = 0
-            for row in simulations.filter(status="SIMULATING"):
-                try:
-                    result = cli.simulation_result(row["simulation_id"])
-
-                    alpha = result.wait().detail()
-                    count += 1
-
-                    alphas.save(alpha)
-                    simulations.complete(row["id"], alpha["id"])
-
-                    print("{:0>3}, save alpha: {}".format(count, alpha["id"]))
-                except brain.BrainError as e:
-                    simulations.error(row["id"])
-                    print(
-                        "{:0>3}, simulation: {}, error: {}".format(
-                            count + 1, row["simulation_id"], str(e)
-                        ),
-                        file=sys.stderr,
-                    )
-
-            if count != 0:
-                total += count
-                print(
-                    "[{:0>4}] {:0>3} alpha saved, wait for next scan.".format(
-                        total, count
-                    )
-                )
-            else:
-                print(
-                    "[{:0>4}] no simulations found, waiting for next scan.".format(
-                        total
-                    )
-                )
-            time.sleep(args.interval)
+    with AlphaDB(args.db) as db:
+        fetch_results(db, cli)
 
 
 if __name__ == "__main__":
