@@ -43,7 +43,7 @@ def simulate(db: AlphaDB, sim: brain.Simulation, limit: int):
                 break
             except brain.BrainError:
                 wait_sec *= 2.1
-                expr = f"[{total:0>3}][\33[0;31mERRO\033[0m] Expr: {row['expr']}"
+                expr = f"[{total + 1:0>3}][\33[0;31mERRO\033[0m] Expr: {row['expr']}"
 
                 # print(f"{expr}, error: {str(e)}", file=sys.stderr)
                 print(f"{expr}, retry[{retry}] after {wait_sec:.2f} seconds.")
