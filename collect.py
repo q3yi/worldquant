@@ -11,42 +11,43 @@ from alpha_db import AlphaDB
 def fetch_results(db: AlphaDB, cli: brain.Client):
     simulations = db.simulations()
     alphas = db.alphas()
-    total = 0
-    wait_sec = 1.0
+
+    succ, fail, wait_sec = 0, 0, 1.0
+
+    def print_info(msg: str, file=sys.stdout):
+        print(
+            f"[\33[0;32m{succ:0>4}\033[0m|\33[0;31m{fail:0>4}\033[0m] {msg}", file=file
+        )
+
     while True:
-        count = 0
+        is_empty = True
         for row in simulations.filter(status="SIMULATING"):
             try:
-                result = cli.simulation_result(row["simulation_id"])
+                is_empty = False
 
-                alpha = result.wait().detail()
-                count += 1
-
+                alpha = cli.simulation_result(row["simulation_id"]).wait().detail()
                 alphas.save(alpha)
                 simulations.complete(row["id"], alpha["id"])
 
-                print(f"{count:0>3}, save alpha: {alpha['id']}")
+                succ += 1
+                print_info(f"New alpha: {alpha['id']}")
             except brain.BrainError as e:
                 simulations.error(row["id"])
-                print(
-                    f"{count:0>3}, simulation: {row['simulation_id']}, error: {str(e)}",
-                    file=sys.stderr,
+                fail += 1
+                print_info(
+                    f"Simulation: {row['simulation_id']}, Error: {str(e)}", sys.stderr
                 )
 
-        if count != 0:
-            total += count
-            wait_sec = wait_sec / 3.0 if wait_sec / 3.0 > 1.0 else 1.0
-
-            print(
-                f"[{total:0>4}] saved {count} alphas, wait {wait_sec:.2f} secs for next scan."
-            )
-        else:
+        if is_empty:
             wait_sec = wait_sec * 2 if wait_sec < 5.0 else wait_sec
-            print(
-                f"[{total:0>4}] no simulations found, wait {wait_sec:.2f} secs for next scan."
-            )
+        else:
+            wait_sec = wait_sec / 3.0 if wait_sec > 1.0 else 1.0
+
+        print_info(f"Rescan after {wait_sec:.2f} secs.")
 
         time.sleep(wait_sec)
+
+        print_info("Rescan...")
 
 
 def main():

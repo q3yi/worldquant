@@ -8,11 +8,54 @@ import brain
 from alpha_db import AlphaDB
 
 
+def print_succ(idx: int, expr: str, msg: str):
+    if len(expr) > 50:
+        expr = expr[:47] + "..."
+
+    print(f"[{idx:0>3}][\33[0;32mSUCC\033[0m] {expr:<50} {msg}")
+
+
+def print_erro(idx: int, expr: str, msg: str):
+    if len(expr) > 50:
+        expr = expr[:47] + "..."
+
+    print(f"[{idx:0>3}][\33[0;31mERRO\033[0m] {expr:<50} {msg}")
+
+
+class RateLimiter:
+    def __init__(self):
+        self.wait_secs = 1.0
+        self.succ_streak = 0
+        self.fail_streak = 0
+
+    def succ(self):
+        if self.fail_streak:
+            self.wait_secs /= 2.0
+            self.fail_streak = 0
+        else:
+            self.succ_streak += 1
+
+        if self.succ_streak >= 5:
+            factor = 0.02 * float(self.succ_streak) if self.succ_streak < 10 else 0.14
+            self.wait_secs = self.wait_secs * (0.8 + factor)
+
+        return self.wait_secs
+
+    def fail(self):
+        self.succ_streak = 0
+        self.fail_streak += 1
+        self.wait_secs *= 2.1
+
+        return self.wait_secs
+
+    def wait(self):
+        time.sleep(self.wait_secs)
+
+
 def simulate(db: AlphaDB, sim: brain.Simulation, limit: int):
-    total, wait_sec, streak = 0, 1.0, 0
+    guard = RateLimiter()
     simulations = db.simulations()
-    for row in simulations.filter(status="PENDING"):
-        retry = 0
+    for idx, row in enumerate(simulations.filter(status="PENDING"), start=1):
         while True:
             try:
                 result = (
@@ -21,37 +64,18 @@ def simulate(db: AlphaDB, sim: brain.Simulation, limit: int):
                     .with_expr(row["expr"])
                     .send()
                 )
-                total += 1
 
                 simulations.start(row["id"], result.simulation_id)
 
-                if retry:
-                    # half wait time
-                    wait_sec /= 2.0
-                    streak = 0
-                else:
-                    streak += 1
+                print_succ(idx, row["expr"], f"Next after {guard.succ():.2f} secs.")
+                guard.wait()
 
-                if streak >= 5:
-                    wait_sec *= 0.9
-
-                print(
-                    f"[{total:0>3}][\33[0;32mDONE\033[0m] Expr: {row['expr']}, next after {wait_sec:.2f} secs."
-                )
-
-                time.sleep(wait_sec)
                 break
             except brain.BrainError:
-                wait_sec *= 2.1
-                expr = f"[{total + 1:0>3}][\33[0;31mERRO\033[0m] Expr: {row['expr']}"
+                print_erro(idx, row["expr"], f"Retry after {guard.fail():.2f} secs.")
+                guard.wait()
 
-                # print(f"{expr}, error: {str(e)}", file=sys.stderr)
-                print(f"{expr}, retry[{retry}] after {wait_sec:.2f} seconds.")
-
-                time.sleep(wait_sec)
-                retry += 1
-
-        if limit != 0 and total >= limit:
+        if limit != 0 and idx >= limit:
             break
 
 
